@@ -1,0 +1,152 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/pgmspace.h>
+#include <util/delay.h>
+#include <string.h>
+
+//velicina prijemnog bafera (2^n)
+#define USART_BUFFER_SIZE 64
+
+#define BR_KORISNIKA 10
+
+char korisnici[BR_KORISNIKA][32] = 
+{
+  	"Sundjer Bob Kockalone",
+    "Dijego Armando Maradona",
+    "Bond. Dzejms bond.",
+    "Zoran Kostic Cane",
+    "Kim Dzong Un",
+  	"Dragan Bozic",
+  	"Nenad Prastalo", 
+  	"Borivoje Kondic",
+  	"Aleksa Krneta",
+  	"Jovan Novakovic"     
+};
+
+char PIN[BR_KORISNIKA][5] = {"5346", "2133", "7445", "8756", "7435", "4500", "7237", "5278", "2281", "9192"};
+
+char RX_Buffer[USART_BUFFER_SIZE]; //prijemni FIFO bafer
+volatile unsigned char RX_Buffer_Size = 0; //broj karaktera u baferu
+volatile unsigned char RX_Buffer_First = 0;
+volatile unsigned char RX_Buffer_Last = 0;
+
+ISR(USART_RX_vect)
+{ 
+	RX_Buffer[RX_Buffer_Last++] = UDR0; //ucitavanje primljenog karaktera
+  	RX_Buffer_Last &= USART_BUFFER_SIZE - 1; //povratak na pocetak ako je doslo do prekoracenja
+  	
+  	if(RX_Buffer_Size < USART_BUFFER_SIZE)
+    	RX_Buffer_Size++; //inkrement brojaca primljenih karaktera
+}
+
+void usartInit(unsigned long baud)
+{	
+  	UCSR0A = 0x00; //U2Xn = 0: onemogucena dvostruka brzina
+  				   //MPCMn = 0: onemogucen multiprocesorski rezim
+    UCSR0B = 0x98; //RXCIEn = 1: dozvola prekida okoncanjem prijema
+  				   //RXENn = 1: dozvola prijema
+  				   //TXENn = 1: dozvola slanja
+  	UCSR0C = 0x06; //UMSELn[1:0] = 00: asinhroni rezim
+  				   //UPMn[1:0] = 00: bit pariteta se ne koristi
+  				   //USBSn = 0: koristi se jedan stop bit
+  				   //UCSZn[2:0] = 8-bit prenos
+  
+   	UBRR0 = F_CPU/(16*baud) - 1;
+ 	UBRR0H = (UBRR0 >> 8) & 0xff;
+	UBRR0L = UBRR0 & 0xff;
+
+  	sei(); //I = 1: dozvola prekida
+}
+
+void usartPutChar(char c)
+{	
+  	while(!(UCSR0A & (1 << 5))); //setovanje UDREn (indikacija da je predajni bafer prazan)
+  	UDR0 = c; //upis karaktera u predajni bafer  
+}
+
+void usartPutString(char *str) 
+{	
+	while(*str != '\0') //izvrsavanje do nailaska na nul-terminator
+    { 
+      usartPutChar(*str); //slanje tekuceg karatkera
+      str++; //azuriranje pokazivaca na sledeci karakter
+    }
+}
+
+void usartPutString_P(const char *str)
+{ 
+  	while(1)
+    {	
+    	char c = pgm_read_byte(str++); //citanje sl. karaktera iz prog. mem.
+      	if(c == '\0') //izlazak iz petlja u slucaju nailaska na nul-terminator
+          	return;
+      	usartPutChar(c); //slanje karaktera
+    }
+}
+
+unsigned char usartAvailable()
+{ 
+  	return RX_Buffer_Size; //ocitavanje broja karaktera u prijemnom baferu
+}
+
+char usartGetChar()
+{ 
+  	char c;
+  	if(!RX_Buffer_Size) //ako je bafer prazan vraca -1
+      	return -1;
+  	
+  	c = RX_Buffer[RX_Buffer_First++]; //citanje karaktera iz prijemnog bafera
+  	RX_Buffer_Size--; //dekrement brojaca karaktera u prijemnom baferu
+  	RX_Buffer_First &= USART_BUFFER_SIZE - 1; //povratak na pocetak ako je doslo do prekoracenja
+  	
+  	return c;
+}
+
+unsigned char usartGetString(char *str)
+{
+  	unsigned char len;
+  	
+  	while(RX_Buffer_Size) //ako ima karaktera u baferu
+    {
+      	str[len++] = usartGetChar(); //ucitava se novi karakter
+    }
+  	
+  	str[len] = '\0'; //prekid stringa
+  	return len; //vraca broj ocitanih karaktera
+}
+     
+int main()
+{
+  usartInit(9600);
+  
+  while(1)
+  {
+    	usartPutString("Unesite vase ime i prezime:\r\n");
+    	while(!usartAvailable());
+    	_delay_ms(100);
+    
+    	char korisnik[32];
+    	usartGetString(korisnik);
+    
+    	int i = 0;
+    	int ispravno = -1;
+    
+    	for(i = 0; i < 10; i++)
+        {
+          	if(!strcmp(korisnik, korisnici[i]))
+            {
+              ispravno = i;
+            }
+        }
+    
+    	if(ispravno < 0)
+        {
+          usartPutString("Ne nalazite se u bazi podataka!\r\n");
+        }
+    
+    	usartPutString("Dobrodosli ");
+    	usartPutString(korisnik);
+    	usartPutString(" ! \r\nUnesite vas PIN kod:\r\n");
+          
+  return 0;
+}
